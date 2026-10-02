@@ -1,0 +1,22 @@
+# Local Python environments
+.venv/
+venv/
+env/
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Generated visualizations and model outputs
+outputs/
+runs/
+checkpoints/
+
+# Raw image dataset files (keep annotation CSVs under BBoxAnnotations)
+data/images/
+train/
+train.zip
+
+# macOS metadata
+.DS_Store
