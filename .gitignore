@@ -13,10 +13,12 @@ outputs/
 runs/
 checkpoints/
 
-# Raw image dataset files (keep annotation CSVs under BBoxAnnotations)
+# Large local datasets
+BBoxAnnotations/
 data/images/
 train/
 train.zip
+sample/
 
 # macOS metadata
 .DS_Store
