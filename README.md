@@ -4,27 +4,21 @@
 
 The repository contains batched annotation CSVs under `BBoxAnnotations/` and a local `train/` image folder. The image folder and archive are excluded from Git because of their size.
 
-Create the environment and run the summary plot:
+Create the environment and draw boxes on a few training images:
 
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python visualize_annotations.py
-```
-
-The summary is written to `outputs/visualizations/annotation_summary.png`. Generate a small box-overlay grid from the training images with:
-
-```sh
 python visualize_annotations.py --images train --max-images 6
 ```
 
-The script checks filenames directly under the image folder rather than scanning image contents. CSV box coordinates are divided by their recorded `image_scale_x` and `image_scale_y` values to map them to the original image dimensions. Identical rows repeated across the full and stage-specific exports are counted once in summaries.
+The box-overlay grid is written to `outputs/visualizations/fundus_box_overlays.png`. The script checks annotation-backed filenames directly under the image folder, so it does not scan or load the full training set. CSV box coordinates are divided by their recorded `image_scale_x` and `image_scale_y` values to map them to the original image dimensions. Identical rows repeated across the full and stage-specific exports are counted once.
 
 ## Initial data observations
 
 - Annotation types include image-level DR grades and lesion bounding boxes, so this is a multi-task dataset rather than box detection alone.
-- Lesion classes and severity grades are imbalanced, and most boxes are small. The generated summary plot provides an initial view of both.
+- Lesion classes and severity grades are imbalanced, and most boxes are small.
 - Keep patient/image grouping intact when making train/validation/test splits; images from the same patient should not leak across splits if patient identifiers can be recovered.
 - Before training, validate coordinate mapping visually on several images and audit labels, duplicate annotations, missing images, and boxes outside image bounds.
 
