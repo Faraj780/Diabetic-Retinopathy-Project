@@ -2,18 +2,30 @@
 
 ## Annotation inspection
 
-The repository contains batched annotation CSVs under `BBoxAnnotations/` and a local `train/` image folder. The image folder and archive are excluded from Git because of their size.
+The repository contains batched annotation CSVs under `BBoxAnnotations/`; only ten sample images are available locally. The image folder and annotations are excluded from Git because of their size.
 
-Create the environment and draw boxes on a few training images:
+Create the environment and draw boxes on the available sample images:
 
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python visualize_annotations.py --images train --max-images 6
+python visualize_annotations.py --images sample --max-images 6
 ```
 
 The box-overlay grid is written to `outputs/visualizations/fundus_box_overlays.png`. The script checks annotation-backed filenames directly under the image folder, so it does not scan or load the full training set. CSV box coordinates are divided by their recorded `image_scale_x` and `image_scale_y` values to map them to the original image dimensions. Identical rows repeated across the full and stage-specific exports are counted once.
+
+## YOLO Data Export
+
+Build an Ultralytics YOLO dataset from whichever annotated images are available:
+
+```sh
+python yolo_loader.py --images sample --output outputs/yolo_sample --seed 42
+```
+
+The exporter writes normalized labels, symlinks, `dataset.yaml`, `class_map.json`, and a patient-grouped `splits.csv`. It reads image dimensions from the actual files, uses the same scaling/clamping code as the visualizer, checks label round trips to within one pixel, and reconciles exported, dropped, and unavailable-image boxes. Existing split files are reused only when they still match the available images and keep each patient's eyes in one split.
+
+The CSVs contain 14 rectangle label names, not seven, so the master class map includes all 14 observed lesion classes. Only two annotated images currently match the local sample folder; the generated output is a loader/export smoke test, not a meaningful training dataset. The original image collection is required for representative train/validation/test splits.
 
 ## Initial data observations
 
