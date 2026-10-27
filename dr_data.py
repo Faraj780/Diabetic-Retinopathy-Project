@@ -172,19 +172,25 @@ def convert_box(row: dict[str, str], image_width: int, image_height: int):
     return Box(x_min, y_min, x_max, y_max, label), None
 
 
-def build_image_records(annotation_data: AnnotationData, image_root: Path) -> BuildReport:
+def build_image_records(
+    annotation_data: AnnotationData,
+    image_root: Path,
+    filenames: Optional[set[str]] = None,
+) -> BuildReport:
     records = []
     missing_images = []
     corrupt_images = []
     report = BuildReport(records, missing_images, corrupt_images)
 
     for filename, rows in sorted(annotation_data.rows_by_image.items()):
-        box_rows = [row for row in rows if is_box(row)]
-        if not box_rows:
+        if filenames is not None and filename not in filenames:
             continue
+        box_rows = [row for row in rows if is_box(row)]
         image_path = image_root / filename
         if not image_path.is_file():
             missing_images.append(filename)
+            continue
+        if not box_rows:
             continue
         try:
             with Image.open(image_path) as image:

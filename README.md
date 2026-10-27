@@ -2,30 +2,30 @@
 
 ## Annotation inspection
 
-The repository contains batched annotation CSVs under `BBoxAnnotations/`; only ten sample images are available locally. The image folder and annotations are excluded from Git because of their size.
+The annotations are batched under `BBoxAnnotations/`. The full fundus training images are available under `train/`; a separate `test/` folder is not currently present. These large image folders and the annotations are excluded from Git.
 
-Create the environment and draw boxes on the available sample images:
+Create the environment and draw boxes on a few training images:
 
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python visualize_annotations.py --images sample --max-images 6
+python visualize_annotations.py --images train --max-images 6
 ```
 
 The box-overlay grid is written to `outputs/visualizations/fundus_box_overlays.png`. The script checks annotation-backed filenames directly under the image folder, so it does not scan or load the full training set. CSV box coordinates are divided by their recorded `image_scale_x` and `image_scale_y` values to map them to the original image dimensions. Identical rows repeated across the full and stage-specific exports are counted once.
 
 ## YOLO Data Export
 
-Build an Ultralytics YOLO dataset from whichever annotated images are available:
+Build an Ultralytics YOLO dataset from the training folder. When a separate `test/` folder is available, the loader will place its annotated images directly in the test split; if it is absent, the test output remains empty.
 
 ```sh
-python yolo_loader.py --images sample --output outputs/yolo_sample --seed 42
+python yolo_loader.py --train-images train --test-images test --output outputs/yolo_dataset --seed 42
 ```
 
-The exporter writes normalized labels, symlinks, `dataset.yaml`, `class_map.json`, and a patient-grouped `splits.csv`. It reads image dimensions from the actual files, uses the same scaling/clamping code as the visualizer, checks label round trips to within one pixel, and reconciles exported, dropped, and unavailable-image boxes. Existing split files are reused only when they still match the available images and keep each patient's eyes in one split.
+The exporter patient-splits only the supplied training images into approximately 85% train and 15% validation. Images in the supplied test folder remain in the test split and are never used to create the training split. It rejects patient IDs shared across the source folders to avoid leakage. The exporter writes normalized labels, symlinks, `dataset.yaml`, `class_map.json`, and a patient-grouped `train_val_splits.csv`. It reads image dimensions from the actual files, uses the same scaling/clamping code as the visualizer, checks label round trips to within one pixel, and reconciles exported, dropped, and unavailable-image boxes. Existing train/validation splits are reused only when they still match the available training images and keep each patient's eyes in one split.
 
-The CSVs contain 14 rectangle label names, not seven, so the master class map includes all 14 observed lesion classes. Only two annotated images currently match the local sample folder; the generated output is a loader/export smoke test, not a meaningful training dataset. The original image collection is required for representative train/validation/test splits.
+The CSVs contain 14 rectangle label names, not seven, so the master class map includes all 14 observed lesion classes. Only images with box annotations are exported; test images need corresponding annotations to be usable for labeled detection evaluation. The `sample/` folder contains both eyes from the same patient, so it should not be passed as both source folders.
 
 ## Initial data observations
 
