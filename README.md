@@ -10,10 +10,10 @@ The working data layout is:
 - Annotation CSV files: `/home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations`
 - Training images: `/mnt/hdd2/faraj/train`
 - Optional test images: `/mnt/hdd2/faraj/test`
-- Generated dataset outputs: `/mnt/hdd2/faraj/outputs`
+- Generated dataset outputs: `/home/faraj/Diabetic-Retinopathy-Project/outputs`
 - Python virtual environment: `/home/faraj/Diabetic-Retinopathy-Project/.venv`
 
-Important: the large image folders are not copied into the home directory. The pipeline reads directly from `/mnt/hdd2/faraj/train` and writes only symlinks and labels into the mounted output location.
+Important: only the large image folders remain on the mounted drive. The pipeline reads directly from `/mnt/hdd2/faraj/train` and writes generated artifacts under the repository’s local `outputs/` folder instead of storing anything else on the mounted volume.
 
 ## 2. Repository structure
 
@@ -47,7 +47,7 @@ cd /home/faraj/Diabetic-Retinopathy-Project
 python visualize_annotations.py \
   --annotations /home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations \
   --images /mnt/hdd2/faraj/train \
-  --output /mnt/hdd2/faraj/outputs/visualizations/fundus_box_overlays.png \
+  --output /home/faraj/Diabetic-Retinopathy-Project/outputs/visualizations/fundus_box_overlays.png \
   --max-images 6
 ```
 
@@ -58,7 +58,7 @@ What it does:
 - converts stored CSV coordinates back to pixel-space boxes using `image_scale_x` / `image_scale_y`
 - clamps boxes to image boundaries
 - rejects malformed, non-positive, and out-of-range lesions
-- saves a small overlay image to the mounted output path
+- saves a small overlay image into the repository-local `outputs/` folder
 
 ### Step C — export the dataset to YOLO format
 
@@ -71,7 +71,7 @@ python yolo_loader.py \
   --annotations /home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations \
   --train-images /mnt/hdd2/faraj/train \
   --test-images /mnt/hdd2/faraj/test \
-  --output /mnt/hdd2/faraj/outputs/yolo_dataset \
+  --output /home/faraj/Diabetic-Retinopathy-Project/outputs/yolo_dataset \
   --seed 42
 ```
 
@@ -79,7 +79,7 @@ If `/mnt/hdd2/faraj/test` is absent, the script does not fail silently; it split
 
 ### Step D — review the outputs
 
-The export writes the following artifacts under the mounted output folder:
+The export writes the following artifacts under the repository-local `outputs/` folder:
 
 - `images/train/` and `images/val/` (symlinks to the original mounted image files)
 - `images/test/` if a valid test folder is present
@@ -123,16 +123,16 @@ The code groups images by patient ID and, when no separate test folder exists, i
 
 This design is intended to avoid optimistic validation results caused by patient-level data leakage while keeping the test set large enough to be meaningful.
 
-## 6. Why the output is kept on the mounted drive
+## 6. Storage policy
 
-The training and test images are large and can consume significant storage. The project avoids copying them into the home directory by:
+The training and test images are large and can consume significant storage. The project therefore avoids copying them into the home directory by:
 
 - reading directly from `/mnt/hdd2/faraj/train`
 - reading directly from `/mnt/hdd2/faraj/test` when available
-- writing generated dataset output to `/mnt/hdd2/faraj/outputs`
+- writing generated dataset artifacts into `/home/faraj/Diabetic-Retinopathy-Project/outputs`
 - creating symlinks rather than duplicates inside the export data structure
 
-This preserves the home volume for code, metadata, and the virtual environment while keeping the expensive image data on the mounted disk.
+This preserves the home volume for code, metadata, and the virtual environment while keeping only the actual image corpus on the mounted disk. No generated model or dataset outputs should be stored under `/mnt/hdd2/faraj`.
 
 ## 7. Training and modeling direction
 
@@ -213,18 +213,18 @@ pip install -r requirements.txt
 python visualize_annotations.py \
   --annotations /home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations \
   --images /mnt/hdd2/faraj/train \
-  --output /mnt/hdd2/faraj/outputs/visualizations/fundus_box_overlays.png \
+  --output /home/faraj/Diabetic-Retinopathy-Project/outputs/visualizations/fundus_box_overlays.png \
   --max-images 6
 
 python yolo_loader.py \
   --annotations /home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations \
   --train-images /mnt/hdd2/faraj/train \
   --test-images /mnt/hdd2/faraj/test \
-  --output /mnt/hdd2/faraj/outputs/yolo_dataset \
+  --output /home/faraj/Diabetic-Retinopathy-Project/outputs/yolo_dataset \
   --seed 42
 ```
 
-This is the intended operating pattern for the project: keep the repo and environment local, keep the image corpus on the HDD, and let the generated dataset live under the mounted output directory.
+This is the intended operating pattern for the project: keep the repo and environment local, keep the image corpus on the HDD, and store generated datasets and training artifacts in the repository’s local `outputs/` folder only.
 
 ## 12. Research reading list
 

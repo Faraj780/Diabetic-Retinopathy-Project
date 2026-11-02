@@ -9,6 +9,7 @@ from dr_data import Box, ImageRecord, convert_box
 from yolo_loader import (
     combine_train_test_assignments,
     create_split_assignments,
+    default_output_root,
     from_yolo,
     patient_id,
     to_yolo,
@@ -133,6 +134,12 @@ class YoloFormatTests(unittest.TestCase):
                 )
                 self.assertTrue(split_labels.issubset(set(lesion_labels)))
                 self.assertTrue(split_labels)
+
+    def test_default_output_root_is_project_local(self):
+        output_root = default_output_root()
+        self.assertTrue(output_root.is_absolute())
+        self.assertIn("Diabetic-Retinopathy-Project", str(output_root))
+        self.assertNotIn("/mnt/hdd2/faraj", str(output_root))
 
     def test_official_test_records_are_not_repartitioned(self):
         training = ImageRecord("101_left.jpeg", Path("101_left.jpeg"), 10, 10, [])

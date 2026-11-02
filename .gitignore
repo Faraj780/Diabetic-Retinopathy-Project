@@ -15,6 +15,10 @@ __pycache__/
 outputs/
 runs/
 checkpoints/
+outputs/*.csv
+outputs/**/*.csv
+**/results.csv
+**/dataset_audit_summary.csv
 
 # Large local datasets are intentionally tracked project assets.
 # Do not ignore the dataset folders required for the loader to run.

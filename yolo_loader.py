@@ -19,6 +19,11 @@ OUTPUT_SPLIT_NAMES = ("train", "val", "test")
 PATIENT_PATTERN = re.compile(r"^(?P<patient>.+)_(?P<eye>left|right)$", re.IGNORECASE)
 
 
+def default_output_root() -> Path:
+    repo_root = Path(__file__).resolve().parent
+    return repo_root / "outputs" / "yolo_dataset"
+
+
 def patient_id(filename: str) -> str:
     match = PATIENT_PATTERN.match(Path(filename).stem)
     return match.group("patient") if match else Path(filename).stem
@@ -268,6 +273,56 @@ def write_yolo_files(records: list[ImageRecord], assignments: dict[str, str], ou
     return total_boxes, class_counts_by_split
 
 
+def write_audit_csv(annotation_data: AnnotationData, train_report, test_report,
+                   missing_image_names, train_patient_count, test_patient_count,
+                   assignments, class_counts_by_split, exported_boxes,
+                   output_root: Path, split_file_reused: bool):
+    all_unique_boxes = sum(
+        1 for rows in annotation_data.rows_by_image.values() for row in rows
+        if (row.get("annotation_type") or "").strip().lower() == "rectangle"
+    )
+    unavailable_boxes = sum(
+        1 for name in missing_image_names + train_report.corrupt_images + test_report.corrupt_images
+        for row in annotation_data.rows_by_image[name]
+        if (row.get("annotation_type") or "").strip().lower() == "rectangle"
+    )
+    dropped = (
+        train_report.malformed_boxes + test_report.malformed_boxes
+        + train_report.nonpositive_boxes + test_report.nonpositive_boxes
+        + train_report.outside_boxes + test_report.outside_boxes
+    )
+    accounted = exported_boxes + dropped + unavailable_boxes
+    rows = [
+        {"metric": "csv_files", "split": "", "label": "", "value": len(annotation_data.csv_files)},
+        {"metric": "raw_rows", "split": "", "label": "", "value": annotation_data.raw_rows},
+        {"metric": "duplicate_rows_removed", "split": "", "label": "", "value": annotation_data.duplicate_rows},
+        {"metric": "unique_rectangle_rows", "split": "", "label": "", "value": all_unique_boxes},
+        {"metric": "exported_boxes", "split": "", "label": "", "value": exported_boxes},
+        {"metric": "dropped_malformed_unknown", "split": "", "label": "", "value": train_report.malformed_boxes + test_report.malformed_boxes},
+        {"metric": "dropped_nonpositive", "split": "", "label": "", "value": train_report.nonpositive_boxes + test_report.nonpositive_boxes},
+        {"metric": "dropped_outside", "split": "", "label": "", "value": train_report.outside_boxes + test_report.outside_boxes},
+        {"metric": "missing_image_files", "split": "", "label": "", "value": len(missing_image_names)},
+        {"metric": "corrupt_image_files", "split": "", "label": "", "value": len(train_report.corrupt_images) + len(test_report.corrupt_images)},
+        {"metric": "reconciliation", "split": "", "label": "", "value": f"{accounted}/{all_unique_boxes}"},
+        {"metric": "train_images", "split": "", "label": "", "value": len(train_report.records)},
+        {"metric": "test_images", "split": "", "label": "", "value": len(test_report.records)},
+        {"metric": "train_patients", "split": "", "label": "", "value": train_patient_count},
+        {"metric": "test_patients", "split": "", "label": "", "value": test_patient_count},
+        {"metric": "split_file_reused", "split": "", "label": "", "value": str(split_file_reused)},
+    ]
+    for split in OUTPUT_SPLIT_NAMES:
+        rows.append({"metric": "split_image_count", "split": split, "label": "", "value": sum(1 for value in assignments.values() if value == split)})
+        rows.append({"metric": "split_box_count", "split": split, "label": "", "value": sum(class_counts_by_split[split].values())})
+        for label, count in sorted(class_counts_by_split[split].items()):
+            rows.append({"metric": "class_count", "split": split, "label": label, "value": count})
+    csv_path = output_root / "dataset_audit_summary.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=["metric", "split", "label", "value"])
+        writer.writeheader()
+        writer.writerows(rows)
+    return csv_path
+
+
 def print_audit(annotation_data: AnnotationData, train_report, test_report,
                 missing_image_names, train_patient_count, test_patient_count,
                 assignments, class_counts_by_split, exported_boxes):
@@ -317,7 +372,7 @@ def main():
     parser.add_argument("--annotations", type=Path, default=repo_root / "BBoxAnnotations")
     parser.add_argument("--train-images", type=Path, default=Path("/mnt/hdd2/faraj/train"))
     parser.add_argument("--test-images", type=Path, default=Path("/mnt/hdd2/faraj/test"))
-    parser.add_argument("--output", type=Path, default=Path("/mnt/hdd2/faraj/outputs/yolo_dataset"))
+    parser.add_argument("--output", type=Path, default=default_output_root())
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -394,7 +449,21 @@ def main():
         class_counts_by_split,
         exported_boxes,
     )
+    audit_csv = write_audit_csv(
+        annotation_data,
+        train_report,
+        test_report,
+        missing_image_names,
+        train_patient_count,
+        len({patient_id(record.filename) for record in test_report.records}),
+        assignments,
+        class_counts_by_split,
+        exported_boxes,
+        args.output,
+        reused_splits,
+    )
     print(f"Split file reused: {reused_splits}; YOLO dataset written to {args.output}")
+    print(f"Audit summary CSV written to {audit_csv}")
     if not test_folder_available:
         print(f"Test image folder not present: {args.test_images}; test output is currently empty.")
 

@@ -87,7 +87,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--annotations", type=Path, default=repo_root / "BBoxAnnotations")
     parser.add_argument("--images", type=Path, default=Path("/mnt/hdd2/faraj/train"))
-    parser.add_argument("--output", type=Path, default=Path("/mnt/hdd2/faraj/outputs/visualizations/fundus_box_overlays.png"))
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=repo_root / "outputs" / "visualizations" / "fundus_box_overlays.png",
+    )
     parser.add_argument("--max-images", type=int, default=6)
     args = parser.parse_args()
 
