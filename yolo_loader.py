@@ -296,11 +296,12 @@ def print_audit(annotation_data: AnnotationData, train_report, test_report,
 
 
 def main():
+    repo_root = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--annotations", type=Path, default=Path("BBoxAnnotations"))
-    parser.add_argument("--train-images", type=Path, default=Path("train"))
-    parser.add_argument("--test-images", type=Path, default=Path("test"))
-    parser.add_argument("--output", type=Path, default=Path("outputs/yolo_dataset"))
+    parser.add_argument("--annotations", type=Path, default=repo_root / "BBoxAnnotations")
+    parser.add_argument("--train-images", type=Path, default=Path("/mnt/hdd2/faraj/train"))
+    parser.add_argument("--test-images", type=Path, default=Path("/mnt/hdd2/faraj/test"))
+    parser.add_argument("--output", type=Path, default=Path("/mnt/hdd2/faraj/outputs/yolo_dataset"))
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 

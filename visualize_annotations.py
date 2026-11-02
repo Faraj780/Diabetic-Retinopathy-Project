@@ -83,10 +83,11 @@ def draw_annotated_images(records, output_path: Path, max_images: int):
 
 
 def main():
+    repo_root = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--annotations", type=Path, default=Path("BBoxAnnotations"))
-    parser.add_argument("--images", type=Path, default=Path("train"))
-    parser.add_argument("--output", type=Path, default=Path("outputs/visualizations/fundus_box_overlays.png"))
+    parser.add_argument("--annotations", type=Path, default=repo_root / "BBoxAnnotations")
+    parser.add_argument("--images", type=Path, default=Path("/mnt/hdd2/faraj/train"))
+    parser.add_argument("--output", type=Path, default=Path("/mnt/hdd2/faraj/outputs/visualizations/fundus_box_overlays.png"))
     parser.add_argument("--max-images", type=int, default=6)
     args = parser.parse_args()
 

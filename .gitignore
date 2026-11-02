@@ -3,6 +3,9 @@
 venv/
 env/
 
+# Project-specific local launch scripts
+run_on_gpus_2_3.sh
+
 # Python-generated files
 __pycache__/
 *.py[cod]
