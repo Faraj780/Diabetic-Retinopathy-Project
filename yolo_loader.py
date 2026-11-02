@@ -13,8 +13,8 @@ from pathlib import Path
 from dr_data import BOX_LABELS, LABEL_TO_ID, AnnotationData, BuildReport, ImageRecord, build_image_records, load_annotations
 
 
-TRAIN_VAL_RATIOS = {"train": 0.85, "val": 0.15}
-TRAIN_VAL_NAMES = tuple(TRAIN_VAL_RATIOS)
+SPLIT_RATIOS = {"train": 0.70, "val": 0.15, "test": 0.15}
+TRAIN_VAL_NAMES = tuple(SPLIT_RATIOS)
 OUTPUT_SPLIT_NAMES = ("train", "val", "test")
 PATIENT_PATTERN = re.compile(r"^(?P<patient>.+)_(?P<eye>left|right)$", re.IGNORECASE)
 
@@ -51,69 +51,84 @@ def from_yolo(line: str, image_width: int, image_height: int):
 
 def create_split_assignments(records: list[ImageRecord], seed: int):
     patient_images: dict[str, list[ImageRecord]] = defaultdict(list)
+    patient_label_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    patient_eye_counts: dict[str, Counter[str]] = defaultdict(Counter)
     for record in records:
-        patient_images[patient_id(record.filename)].append(record)
+        patient = patient_id(record.filename)
+        patient_images[patient].append(record)
+        patient_label_counts[patient].update(box.label for box in record.boxes)
+        patient_eye_counts[patient]["left" if record.filename.lower().endswith("_left") else "right"] += 1
 
-    rng = random.Random(seed)
-    patient_labels = {
-        patient: Counter(box.label for record in patient_records for box in record.boxes)
-        for patient, patient_records in patient_images.items()
-    }
-    label_patient_counts = Counter(
-        label for labels in patient_labels.values() for label in labels
-    )
     total_label_boxes = Counter(
         box.label for record in records for box in record.boxes
     )
+    total_eye_boxes = Counter()
+    for patient, counts in patient_eye_counts.items():
+        total_eye_boxes.update(counts)
+
+    total_images = len(records)
     target_images = {
-        split: TRAIN_VAL_RATIOS[split] * len(records) for split in TRAIN_VAL_NAMES
+        split: SPLIT_RATIOS[split] * total_images for split in TRAIN_VAL_NAMES
     }
-    target_boxes = {
+    target_label_boxes = {
         split: {
-            label: TRAIN_VAL_RATIOS[split] * total_label_boxes[label]
+            label: SPLIT_RATIOS[split] * total_label_boxes[label]
             for label in total_label_boxes
         }
         for split in TRAIN_VAL_NAMES
     }
+    target_eye_counts = {
+        split: {
+            eye: SPLIT_RATIOS[split] * total_eye_boxes.get(eye, 0)
+            for eye in ("left", "right")
+        }
+        for split in TRAIN_VAL_NAMES
+    }
+
+    rng = random.Random(seed)
     patients = sorted(
         patient_images,
         key=lambda patient: (
-            min(
-                (label_patient_counts[label] for label in patient_labels[patient]),
-                default=len(patient_images) + 1,
-            ),
-            -len(patient_labels[patient]),
-            -sum(patient_labels[patient].values()),
+            -sum(patient_label_counts[patient].values()),
+            -len(patient_images[patient]),
+            -patient_eye_counts[patient].get("left", 0),
+            -patient_eye_counts[patient].get("right", 0),
             rng.random(),
         ),
     )
+
     assignments = {}
     split_image_counts = Counter()
     split_box_counts = {split: Counter() for split in TRAIN_VAL_NAMES}
+    split_eye_counts = {split: Counter() for split in TRAIN_VAL_NAMES}
 
-    for patient_index, patient in enumerate(patients):
+    for patient in patients:
         patient_records = patient_images[patient]
-        label_counts = patient_labels[patient]
+        label_counts = patient_label_counts[patient]
+        eye_counts = patient_eye_counts[patient]
 
         def assignment_cost(split):
-            image_before = split_image_counts[split] - target_images[split]
-            image_after = image_before + len(patient_records)
-            image_cost = (image_after**2 - image_before**2) / max(target_images[split] ** 2, 1)
-            class_cost = 0.0
-            for label, count in label_counts.items():
-                target = target_boxes[split][label]
-                before = split_box_counts[split][label] - target
-                after = before + count
-                class_cost += (after**2 - before**2) / max(target**2, 1)
-            return image_cost + class_cost / max(len(label_counts), 1)
+            image_after = split_image_counts[split] + len(patient_records)
+            image_error = abs(image_after - target_images[split]) / max(target_images[split], 1.0)
 
-        if len(patients) >= 2 and patient_index == len(patients) - 1 and not split_image_counts["val"]:
-            split = "val"
-        else:
-            split = min(TRAIN_VAL_NAMES, key=assignment_cost)
+            eye_error = 0.0
+            for eye in ("left", "right"):
+                eye_after = split_eye_counts[split][eye] + eye_counts.get(eye, 0)
+                target = target_eye_counts[split].get(eye, 0.0)
+                eye_error += abs(eye_after - target) / max(target, 1.0)
+
+            class_error = 0.0
+            for label in total_label_boxes:
+                label_after = split_box_counts[split][label] + label_counts.get(label, 0)
+                target = target_label_boxes[split].get(label, 0.0)
+                class_error += abs(label_after - target) / max(target, 1.0)
+            return image_error + 2.5 * eye_error + 3.0 * class_error
+
+        split = min(TRAIN_VAL_NAMES, key=assignment_cost)
         split_image_counts[split] += len(patient_records)
+        split_eye_counts[split].update({eye: eye_counts.get(eye, 0) for eye in ("left", "right")})
         split_box_counts[split].update(label_counts)
-        for record in patient_images[patient]:
+        for record in patient_records:
             assignments[record.filename] = split
     return assignments, len(patients)
 
@@ -128,18 +143,19 @@ def load_or_create_splits(records: list[ImageRecord], split_path: Path, seed: in
                 f"Existing split file {split_path} does not match available records. "
                 "Preserve and review splits.csv instead of replacing it automatically."
             )
-        invalid = set(saved.values()) - set(TRAIN_VAL_NAMES)
-        if invalid:
-            raise RuntimeError(f"Unknown split names in {split_path}: {sorted(invalid)}")
-        patient_splits = defaultdict(set)
-        for filename, split in saved.items():
-            patient_splits[patient_id(filename)].add(split)
-        conflicting_patients = [patient for patient, splits in patient_splits.items() if len(splits) > 1]
-        if conflicting_patients:
-            raise RuntimeError(
-                f"Existing split file separates eyes from patient(s): {conflicting_patients[:10]}"
-            )
-        return saved, len({patient_id(name) for name in saved}), True
+        if set(saved.values()) == set(TRAIN_VAL_NAMES):
+            invalid = set(saved.values()) - set(TRAIN_VAL_NAMES)
+            if invalid:
+                raise RuntimeError(f"Unknown split names in {split_path}: {sorted(invalid)}")
+            patient_splits = defaultdict(set)
+            for filename, split in saved.items():
+                patient_splits[patient_id(filename)].add(split)
+            conflicting_patients = [patient for patient, splits in patient_splits.items() if len(splits) > 1]
+            if conflicting_patients:
+                raise RuntimeError(
+                    f"Existing split file separates eyes from patient(s): {conflicting_patients[:10]}"
+                )
+            return saved, len({patient_id(name) for name in saved}), True
 
     assignments, patient_count = create_split_assignments(records, seed)
     split_path.parent.mkdir(parents=True, exist_ok=True)
@@ -341,11 +357,19 @@ def main():
         args.output / "train_val_splits.csv",
         args.seed,
     )
-    assignments = combine_train_test_assignments(
-        train_report.records,
-        test_report.records,
-        train_assignments,
-    )
+    if test_folder_available:
+        train_assignments = {
+            filename: split
+            for filename, split in train_assignments.items()
+            if split != "test"
+        }
+        assignments = combine_train_test_assignments(
+            train_report.records,
+            test_report.records,
+            train_assignments,
+        )
+    else:
+        assignments = train_assignments
     write_class_map(args.output)
     write_dataset_yaml(args.output)
     exported_boxes, class_counts_by_split = write_yolo_files(

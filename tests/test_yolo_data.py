@@ -1,4 +1,5 @@
 import unittest
+from collections import Counter
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -88,7 +89,7 @@ class YoloFormatTests(unittest.TestCase):
                 records.append(ImageRecord(filename, path, 100, 100, [box]))
 
             assignments, patient_count = create_split_assignments(records, seed=23)
-            labels_by_split = {"train": set(), "val": set()}
+            labels_by_split = {"train": set(), "val": set(), "test": set()}
             for record in records:
                 labels_by_split[assignments[record.filename]].update(
                     box.label for box in record.boxes
@@ -97,6 +98,41 @@ class YoloFormatTests(unittest.TestCase):
             self.assertEqual(patient_count, 12)
             self.assertTrue(all("Retinal Microaneurysm" in labels for labels in labels_by_split.values()))
             self.assertTrue(all("Retinal Dot Haemorrhage" in labels for labels in labels_by_split.values()))
+
+    def test_split_uses_three_way_split_with_balanced_lesions(self):
+        with TemporaryDirectory() as directory:
+            image_root = Path(directory)
+            records = []
+            lesion_labels = [
+                "Retinal Microaneurysm",
+                "Hard Retinal Exudate (Retinal Lipid Deposit)",
+                "Retinal Dot Haemorrhage",
+            ]
+            for patient_number in range(20):
+                for eye in ("left", "right"):
+                    filename = f"{patient_number}_{eye}.jpeg"
+                    path = image_root / filename
+                    Image.new("RGB", (100, 100)).save(path)
+                    label = lesion_labels[patient_number % len(lesion_labels)]
+                    box = Box(10, 10, 20, 20, label)
+                    records.append(ImageRecord(filename, path, 100, 100, [box]))
+
+            assignments, patient_count = create_split_assignments(records, seed=23)
+            split_counts = Counter(assignments.values())
+            self.assertEqual(set(assignments.values()), {"train", "val", "test"})
+            self.assertEqual(patient_count, 20)
+            self.assertGreaterEqual(split_counts["train"], 20)
+            self.assertGreater(split_counts["val"], 0)
+            self.assertGreater(split_counts["test"], 0)
+            for split in ("train", "val", "test"):
+                split_labels = set(
+                    box.label
+                    for record in records
+                    if assignments[record.filename] == split
+                    for box in record.boxes
+                )
+                self.assertTrue(split_labels.issubset(set(lesion_labels)))
+                self.assertTrue(split_labels)
 
     def test_official_test_records_are_not_repartitioned(self):
         training = ImageRecord("101_left.jpeg", Path("101_left.jpeg"), 10, 10, [])
