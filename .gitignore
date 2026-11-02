@@ -13,12 +13,8 @@ outputs/
 runs/
 checkpoints/
 
-# Large local datasets
-BBoxAnnotations/
-data/images/
-train/
-train.zip
-sample/
+# Large local datasets are intentionally tracked project assets.
+# Do not ignore the dataset folders required for the loader to run.
 
 # macOS metadata
 .DS_Store
