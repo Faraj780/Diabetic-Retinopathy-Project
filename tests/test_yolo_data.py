@@ -1,18 +1,19 @@
 import unittest
+import csv
 from collections import Counter
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from PIL import Image
 
-from dr_data import Box, ImageRecord, convert_box
+from dr_data import BOX_LABELS, Box, ImageRecord, convert_box
 from yolo_loader import (
-    combine_train_test_assignments,
     create_split_assignments,
     default_output_root,
     from_yolo,
     patient_id,
     to_yolo,
+    write_split_lesion_counts,
 )
 
 
@@ -141,18 +142,25 @@ class YoloFormatTests(unittest.TestCase):
         self.assertIn("Diabetic-Retinopathy-Project", str(output_root))
         self.assertNotIn("/mnt/hdd2/faraj", str(output_root))
 
-    def test_official_test_records_are_not_repartitioned(self):
-        training = ImageRecord("101_left.jpeg", Path("101_left.jpeg"), 10, 10, [])
-        testing = ImageRecord("202_right.jpeg", Path("202_right.jpeg"), 10, 10, [])
-        assignments = combine_train_test_assignments([training], [testing], {training.filename: "val"})
-        self.assertEqual(assignments, {"101_left.jpeg": "val", "202_right.jpeg": "test"})
+    def test_lesion_spreadsheet_has_every_class_and_split(self):
+        with TemporaryDirectory() as directory:
+            output_root = Path(directory)
+            box_counts = {split: Counter() for split in ("train", "val", "test")}
+            image_counts = {split: Counter() for split in ("train", "val", "test")}
+            box_counts["train"][BOX_LABELS[0]] = 4
+            image_counts["train"][BOX_LABELS[0]] = 2
 
-    def test_rejects_patient_in_both_source_folders(self):
-        training = ImageRecord("101_left.jpeg", Path("101_left.jpeg"), 10, 10, [])
-        testing = ImageRecord("101_right.jpeg", Path("101_right.jpeg"), 10, 10, [])
-        with self.assertRaisesRegex(ValueError, "Patient IDs occur in both"):
-            combine_train_test_assignments([training], [testing], {training.filename: "train"})
+            output_path = write_split_lesion_counts(output_root, box_counts, image_counts)
+            with output_path.open(newline="", encoding="utf-8") as file:
+                rows = list(csv.DictReader(file))
 
+            self.assertEqual(len(rows), len(BOX_LABELS) * 3)
+            first = next(row for row in rows if row["split"] == "train" and row["lesion_type"] == BOX_LABELS[0])
+            self.assertEqual(first["images_with_lesion"], "2")
+            self.assertEqual(first["lesion_box_count"], "4")
+            zero = next(row for row in rows if row["split"] == "val" and row["lesion_type"] == BOX_LABELS[0])
+            self.assertEqual(zero["images_with_lesion"], "0")
+            self.assertEqual(zero["lesion_box_count"], "0")
 
 if __name__ == "__main__":
     unittest.main()

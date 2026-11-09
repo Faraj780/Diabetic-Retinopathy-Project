@@ -9,7 +9,7 @@ The working data layout is:
 - Repository code: `/home/faraj/Diabetic-Retinopathy-Project`
 - Annotation CSV files: `/home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations`
 - Training images: `/mnt/hdd2/faraj/train`
-- Optional test images: `/mnt/hdd2/faraj/test`
+- Train, validation, and test images: all sourced from `/mnt/hdd2/faraj/train`
 - Generated dataset outputs: `/home/faraj/Diabetic-Retinopathy-Project/outputs`
 - Python virtual environment: `/home/faraj/Diabetic-Retinopathy-Project/.venv`
 
@@ -20,6 +20,7 @@ Important: only the large image folders remain on the mounted drive. The pipelin
 - `dr_data.py`: shared annotation parsing, box validation, and coordinate conversion
 - `visualize_annotations.py`: plots boxes on a small sample of fundus images
 - `yolo_loader.py`: builds train/val/test YOLO exports and audits annotation consistency
+- `train_yolo.py`: validates the export, runs reproducible YOLOv8 training, and evaluates the held-out internal test split
 - `tests/test_yolo_data.py`: verifies split logic, scaling, validation rules, and patient safety
 - `BBoxAnnotations/`: CSV annotation batches used to construct ground-truth lesion boxes
 
@@ -70,23 +71,23 @@ cd /home/faraj/Diabetic-Retinopathy-Project
 python yolo_loader.py \
   --annotations /home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations \
   --train-images /mnt/hdd2/faraj/train \
-  --test-images /mnt/hdd2/faraj/test \
   --output /home/faraj/Diabetic-Retinopathy-Project/outputs/yolo_dataset \
   --seed 42
 ```
 
-If `/mnt/hdd2/faraj/test` is absent, the script does not fail silently; it splits the annotated training set internally into 70% train, 15% validation, and 15% test. The split is patient-safe and class-aware, so left/right eyes and lesion classes are balanced as much as possible. If a real test folder exists, the importer keeps that folder separate and does not merge it into the training split.
+The loader uses the one internal image folder and partitions its annotated images into 70% train, 15% validation, and 15% test. Patients are assigned as indivisible groups, so both eyes remain together. Split assignment considers total image counts, left/right balance, per-class lesion-positive image counts, and per-class box counts. Rare classes that occur in fewer than three patient groups cannot appear in all three partitions; the audit reports these coverage limitations rather than duplicating patients or leaking them across splits.
 
 ### Step D — review the outputs
 
 The export writes the following artifacts under the repository-local `outputs/` folder:
 
 - `images/train/` and `images/val/` (symlinks to the original mounted image files)
-- `images/test/` if a valid test folder is present
+- `images/test/` from the internal patient-safe partition
 - `labels/train/`, `labels/val/`, `labels/test/`
 - `dataset.yaml`
 - `class_map.json`
-- `train_val_splits.csv`
+- `patient_lesion_balanced_splits.csv`
+- `lesion_counts_by_split.csv`: every lesion class for train/validation/test, with both positive-image and box counts
 
 The script also prints an audit summary that includes:
 
@@ -96,6 +97,7 @@ The script also prints an audit summary that includes:
 - box reconciliation counts
 - patient count and split counts
 - class counts by split
+- lesion-positive image counts by class and split
 
 ## 4. Data validation rules
 
@@ -108,18 +110,18 @@ The pipeline intentionally forces strict validation:
 - boxes must be inside image bounds after scaling
 - duplicate CSV rows are removed
 - patient IDs are grouped so both eyes of the same patient stay in the same split
-- train and test folders cannot share patient IDs
+- all three splits are sourced from the single internal image folder
 
 This is important because leakage across patients can make validation metrics look artificially strong.
 
 ## 5. Patient-safe split logic
 
-The code groups images by patient ID and, when no separate test folder exists, it internally assigns patients to a 70/15/15 split: train/validation/test. A simple rule is used:
+The code groups images by patient ID and assigns the internal source to a 70/15/15 split: train/validation/test. A simple rule is used:
 
 - `123_left.jpeg` and `123_right.jpeg` belong to the same patient
-- any patient appearing in both the source training set and the source test set is rejected
-- the training set is divided by patient into train, validation, and test subsets
-- when an external test folder is present, it remains separate and is not re-partitioned into the internal training split
+- the assignment objective balances total image counts and the distribution of lesion-positive images and boxes by class
+- left/right eyes from a patient stay in the same partition
+- rare lesions may be absent from one or more partitions when too few independent patients contain them
 
 This design is intended to avoid optimistic validation results caused by patient-level data leakage while keeping the test set large enough to be meaningful.
 
@@ -127,8 +129,7 @@ This design is intended to avoid optimistic validation results caused by patient
 
 The training and test images are large and can consume significant storage. The project therefore avoids copying them into the home directory by:
 
-- reading directly from `/mnt/hdd2/faraj/train`
-- reading directly from `/mnt/hdd2/faraj/test` when available
+- reading all source images directly from `/mnt/hdd2/faraj/train`
 - writing generated dataset artifacts into `/home/faraj/Diabetic-Retinopathy-Project/outputs`
 - creating symlinks rather than duplicates inside the export data structure
 
@@ -187,7 +188,7 @@ This prevents accidental use of GPUs 0 and 1, which are already reserved by othe
 - Keep the virtual environment under the repo (for example `.venv`) to satisfy local environment requirements.
 - Use only the allowed GPUs for model runs: physical GPUs 2 and 3.
 - If the annotation CSV folder changes location, update the `--annotations` path in the commands above.
-- If a test folder is not yet available, the exporter creates an internal 70/15/15 train/validation/test split from the annotated training images.
+- Train, validation, and test partitions are all generated from `/mnt/hdd2/faraj/train`.
 
 ## 10. Validation status
 
@@ -198,7 +199,7 @@ The repository includes automated tests that check:
 - deterministic train/val split assignment
 - patient grouping across both eyes
 - class distribution across splits
-- official test-folder handling
+- complete lesion-count spreadsheet output, including zero-count classes
 
 The project tests are passing under the current environment.
 
@@ -219,10 +220,20 @@ python visualize_annotations.py \
 python yolo_loader.py \
   --annotations /home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations \
   --train-images /mnt/hdd2/faraj/train \
-  --test-images /mnt/hdd2/faraj/test \
   --output /home/faraj/Diabetic-Retinopathy-Project/outputs/yolo_dataset \
   --seed 42
+
+./run_on_gpus_2_3.sh .venv/bin/python train_yolo.py \
+  --data /home/faraj/Diabetic-Retinopathy-Project/outputs/yolo_dataset/dataset.yaml \
+  --model yolov8n.pt \
+  --epochs 20 \
+  --imgsz 640 \
+  --batch 16 \
+  --device 0,1 \
+  --seed 42
 ```
+
+The trainer checks that all three exported folders match the split manifest and that no patient crosses split boundaries before it starts. Each launch replaces the previous generated contents of `outputs/yolo_runs/`, keeping the latest checkpoints, plots, config, and metrics directly in that one folder. Training uses only train and validation data; after training, the best checkpoint is evaluated once on the held-out internal test split. `test_metrics.csv` contains aggregate and per-class precision, recall, mAP50, and mAP50-95. The test set is not used to select checkpoints.
 
 This is the intended operating pattern for the project: keep the repo and environment local, keep the image corpus on the HDD, and store generated datasets and training artifacts in the repository’s local `outputs/` folder only.
 
