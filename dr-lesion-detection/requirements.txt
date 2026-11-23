@@ -1,7 +1,0 @@
-numpy
-pillow
-matplotlib
-pyyaml
-pytest
-# Installs PyTorch too. YOLO26 needs a recent version; upgrade with: pip install -U ultralytics
-ultralytics

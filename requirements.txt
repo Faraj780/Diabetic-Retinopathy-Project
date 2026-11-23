@@ -1,2 +1,13 @@
-matplotlib
-Pillow
+# PyTorch built for CUDA 12.1. The server's NVIDIA driver (535, CUDA 12.2) is too old for the
+# default pip build (CUDA 13), which would silently fall back to CPU. Check with:
+#   python -c "import torch; print(torch.cuda.is_available())"
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+
+numpy
+pillow
+pyyaml
+pytest
+# YOLO26 (later) needs a recent version; upgrade with: pip install -U ultralytics
+ultralytics

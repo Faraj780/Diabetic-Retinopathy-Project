@@ -1,0 +1,45 @@
+# Settings for data preparation and training. Paths are absolute or relative to the project folder.
+
+paths:
+  annotations: BBoxAnnotations     # annotation CSVs (searched recursively)
+  images: /mnt/hdd2/faraj/train    # Kaggle training images. Read-only: nothing is ever written here
+  output: data/processed           # split + YOLO dataset (images are symlinks to the folder above)
+  results: outputs                 # split_summary.csv and a copy of each run's results.csv
+
+# Class order sets the YOLO class ids (0, 1, 2, ...). Don't reorder it after the first training run.
+classes:
+  - Retinal Microaneurysm
+  - Retinal Haemorrhage
+  - Hard Retinal Exudate (Retinal Lipid Deposit)
+  - Soft Retinal Exudate (Cotton wool spot)
+  - New Vessels at Disc (NVD)
+  - New Vessels Elsewhere (NVE)
+  - Pre-retinal Haemorrhage
+  - Other Intraretinal Microvascular Abnormalities (IRMA)
+  - Retinal veins beaded (venous beading)
+
+# CSV label -> class name. Annotators used the generic "Retinal Haemorrhages" for ~5,200 boxes,
+# often in the same images as dot/blot boxes, so all three are merged: dropping the generic boxes
+# would teach the model that real haemorrhages are background. Labels that are neither a class
+# nor mapped here are dropped (Retinal Thickening: 2 boxes, Vitreous Haemorrhage: 1).
+label_map:
+  Retinal Dot Haemorrhage: Retinal Haemorrhage
+  Retinal Blot Haemorrhage: Retinal Haemorrhage
+  Retinal Haemorrhages: Retinal Haemorrhage
+  Diabetic retinal venous beading: Retinal veins beaded (venous beading)
+
+# Whole-image labels that give the DR grade. Only used to balance the split.
+grade_labels:
+  No Diabetic Retinopathy: 0
+  Mild Non-Proliferative Diabetic Retinopathy: 1
+  Moderate Non-Proliferative Diabetic Retinopathy: 2
+  Severe Non-Proliferative Diabetic Retinopathy: 3
+  Proliferative Diabetic Retinopathy: 4
+
+split:
+  ratios: {train: 0.70, val: 0.15, test: 0.15}
+  seed: 0
+
+training:
+  # The shared server has GPUs 0-3; we may only use 2 and 3. train.py hides the others.
+  allowed_gpus: [2, 3]

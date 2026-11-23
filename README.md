@@ -1,251 +1,110 @@
-# Diabetic Retinopathy Project
+# Diabetic retinopathy lesion detection
 
-This repository prepares retinal-fundus lesion annotations into a dataset that can be inspected, validated, and exported to a YOLO-style object-detection format. The project is intentionally designed so that the large image corpus stays on the mounted storage drive and the repository only stores code, small metadata, and the annotation CSVs.
+Benchmark of object detectors on Kaggle DR fundus images with bounding-box lesion annotations
+(9 lesion classes, see `configs/default.yaml`). The aim, as agreed with the supervisor, is a
+working benchmark that compares detector families on the same data, not a target accuracy.
 
-## 1. Project layout
+**Current stage: YOLOv8 only.** Other formats and models come later (see [Roadmap](#roadmap)).
 
-The working data layout is:
+## Layout
 
-- Repository code: `/home/faraj/Diabetic-Retinopathy-Project`
-- Annotation CSV files: `/home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations`
-- Training images: `/mnt/hdd2/faraj/train`
-- Train, validation, and test images: all sourced from `/mnt/hdd2/faraj/train`
-- Generated dataset outputs: `/home/faraj/Diabetic-Retinopathy-Project/outputs`
-- Python virtual environment: `/home/faraj/Diabetic-Retinopathy-Project/.venv`
+```
+configs/default.yaml   paths, classes, label merging, split ratios, allowed GPUs
+drdet/
+  annotations.py       CSV rows -> boxes per image (the one place parsing happens)
+  split.py             train/val/test split, patients kept together
+  export_yolo.py       YOLO folders + dataset.yaml
+  pipeline.py          runs the three steps above
+scripts/
+  prepare_data.py      1. build the split and the YOLO dataset
+  train.py             2. train YOLOv8
+tests/                 pytest tests on a small fake dataset
+```
 
-Important: only the large image folders remain on the mounted drive. The pipeline reads directly from `/mnt/hdd2/faraj/train` and writes generated artifacts under the repository’s local `outputs/` folder instead of storing anything else on the mounted volume.
+Generated (not in git): `data/processed/` (split + YOLO dataset), `runs/` (training runs),
+`outputs/` (`sample_model_input.jpg`: one training image exactly as YOLOv8 receives it).
 
-## 2. Repository structure
+## Setup on the server
 
-- `dr_data.py`: shared annotation parsing, box validation, and coordinate conversion
-- `visualize_annotations.py`: plots boxes on a small sample of fundus images
-- `yolo_loader.py`: builds train/val/test YOLO exports and audits annotation consistency
-- `train_yolo.py`: validates the export, runs reproducible YOLOv8 training, and evaluates the held-out internal test split
-- `tests/test_yolo_data.py`: verifies split logic, scaling, validation rules, and patient safety
-- `BBoxAnnotations/`: CSV annotation batches used to construct ground-truth lesion boxes
-
-## 3. Intended workflow
-
-### Step A — create the local environment
+The project, annotation CSVs and venv live in the home folder. `/mnt/hdd2/faraj/train` holds
+only the Kaggle training images and is read-only: nothing is written there (the YOLO dataset
+uses symlinks to the images).
 
 ```bash
 cd /home/faraj/Diabetic-Retinopathy-Project
 python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
+source .venv/bin/activate
 pip install -r requirements.txt
+python -c "import torch; print(torch.cuda.is_available())"   # should print True
+nvidia-smi                                                    # shared server: we may only use GPUs 2 and 3
 ```
 
-This keeps the dependency environment under the project folder, which is acceptable for this server while keeping the actual dataset files on the mounted HDD.
+Run long jobs inside `tmux` so they survive a dropped connection (`tmux new -s train`, detach
+with Ctrl+b then d, come back with `tmux attach -t train`).
 
-### Step B — visually inspect annotation alignment
-
-The visual QA script overlays lesion boxes onto a few sample retinal images. This is meant to catch coordinate issues before training begins.
+## Workflow
 
 ```bash
-cd /home/faraj/Diabetic-Retinopathy-Project
-. .venv/bin/activate
-python visualize_annotations.py \
-  --annotations /home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations \
-  --images /mnt/hdd2/faraj/train \
-  --output /home/faraj/Diabetic-Retinopathy-Project/outputs/visualizations/fundus_box_overlays.png \
-  --max-images 6
+python scripts/prepare_data.py                              # 1. split + YOLO dataset
+python scripts/train.py --epochs 1                          # 2. quick check that training runs
+python scripts/train.py --size n --imgsz 1024 --epochs 50   # 3. first real run
 ```
 
-What it does:
+If a GPU runs out of memory, lower `--batch` (or `--imgsz`). Other Ultralytics settings:
+`--set lr0=0.001`. Resume an interrupted run with `--resume runs/yolov8/<name>/weights/last.pt`.
+Each run is saved in `runs/yolov8/<name>/` (weights, `results.csv`, plots, and
+`train_batch*.jpg` showing augmented training batches).
 
-- loads CSV rows from the annotation folder
-- keeps only rectangle annotations
-- converts stored CSV coordinates back to pixel-space boxes using `image_scale_x` / `image_scale_y`
-- clamps boxes to image boundaries
-- rejects malformed, non-positive, and out-of-range lesions
-- saves a small overlay image into the repository-local `outputs/` folder
+**GPUs:** only GPUs 2 and 3 (`training.allowed_gpus`). `train.py` hides the others from
+PyTorch and uses both by default (`--batch` is the total over both); `--device 2` or
+`--device 3` uses one. Commands that don't go through `train.py` (like `yolo ...` below) need
+`CUDA_VISIBLE_DEVICES=2,3` in front, otherwise they default to GPU 0.
 
-### Step C — export the dataset to YOLO format
+### Evaluating on the test set (once, at the end)
 
-The exporter creates a YOLO dataset with normalized labels, image symlinks, train/val/test folders, class mapping, and a split audit file.
+Training only uses train and val. When a model is final, evaluate the test split once:
 
 ```bash
-cd /home/faraj/Diabetic-Retinopathy-Project
-. .venv/bin/activate
-python yolo_loader.py \
-  --annotations /home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations \
-  --train-images /mnt/hdd2/faraj/train \
-  --output /home/faraj/Diabetic-Retinopathy-Project/outputs/yolo_dataset \
-  --seed 42
+CUDA_VISIBLE_DEVICES=2,3 yolo detect val model=runs/yolov8/<name>/weights/best.pt \
+  data=data/processed/yolo/dataset.yaml split=test imgsz=1024
 ```
 
-The loader uses the one internal image folder and partitions its annotated images into 70% train, 15% validation, and 15% test. Patients are assigned as indivisible groups, so both eyes remain together. Split assignment considers total image counts, left/right balance, per-class lesion-positive image counts, and per-class box counts. Rare classes that occur in fewer than three patient groups cannot appear in all three partitions; the audit reports these coverage limitations rather than duplicating patients or leaking them across splits.
+## Decisions built into the code (be ready to explain them)
 
-### Step D — review the outputs
+- **Split 70/15/15**, agreed with the supervisor: with about 3,400 images, 10% would leave too few to test on.
+- **Patients kept together.** A patient's left and right eyes go in the same split, because
+  the two eyes look alike and splitting them would leak information into the test set.
+- **Balanced split.** Iterative stratification (Sechidis et al., 2011) over patients, so each
+  split gets about its share of images, boxes of every class and images of every DR grade.
+- **The split is fixed.** `data/processed/splits.csv` is reused on every run so later models
+  see the same data. `--resplit` makes a new one; only do that on purpose.
+- **DR grades** come from the `whole_image` rows in the CSVs (Kaggle's `trainLabels.csv` isn't
+  on the server) and are only used to balance the split. Graded twice differently: higher grade.
+- **Haemorrhages merged into one class.** Annotators used the generic "Retinal Haemorrhages"
+  for about 5,200 boxes, often in the same images as "Dot" and "Blot" boxes, so dot vs blot
+  isn't labelled consistently. Dropping the generic boxes would leave real haemorrhages
+  unlabelled (the model would learn they're background), so all three map to "Retinal
+  Haemorrhage" (`label_map` in the config). Pre-retinal haemorrhage, IRMA and venous beading
+  are kept as classes for the same reason; retinal thickening (2 boxes) and vitreous
+  haemorrhage (1) are dropped.
+- **Cleaning.** Exact duplicate CSV rows are removed (the two annotation folders overlap).
+  Coordinates are divided by the annotation tool's scale, clipped to the image; boxes under
+  1 px and duplicate boxes are dropped. Images without boxes are left out.
+- **Image size 1024** by default, because lesions are tiny: at 640 many microaneurysms would
+  be only a few pixels wide.
+- **Class order** in the config sets the YOLO class ids. Don't change it mid-project.
 
-The export writes the following artifacts under the repository-local `outputs/` folder:
+## Roadmap
 
-- `images/train/` and `images/val/` (symlinks to the original mounted image files)
-- `images/test/` from the internal patient-safe partition
-- `labels/train/`, `labels/val/`, `labels/test/`
-- `dataset.yaml`
-- `class_map.json`
-- `patient_lesion_balanced_splits.csv`
-- `lesion_counts_by_split.csv`: every lesion class for train/validation/test, with both positive-image and box counts
+1. **YOLOv8 (now).** Get the data through YOLOv8 and settle image size and training settings.
+2. **More YOLO models.** YOLO26 (same YOLO data, recent `ultralytics`); YOLOv5 anchor-based
+   from the original repository (github.com/ultralytics/yolov5), which reads the same `dataset.yaml`.
+3. **COCO format, Faster R-CNN and DETR.** A COCO export next to `export_yolo.py`, driven by
+   the same records and split.
+4. **Same evaluation for all.** Every model scored with the same metric code on the same test split.
 
-The script also prints an audit summary that includes:
-
-- number of raw rows and duplicate rows filtered
-- broken or malformed boxes dropped
-- missing/corrupt image files
-- box reconciliation counts
-- patient count and split counts
-- class counts by split
-- lesion-positive image counts by class and split
-
-## 4. Data validation rules
-
-The pipeline intentionally forces strict validation:
-
-- rectangle rows only
-- valid numeric coordinates
-- positive width and height
-- positive scale values
-- boxes must be inside image bounds after scaling
-- duplicate CSV rows are removed
-- patient IDs are grouped so both eyes of the same patient stay in the same split
-- all three splits are sourced from the single internal image folder
-
-This is important because leakage across patients can make validation metrics look artificially strong.
-
-## 5. Patient-safe split logic
-
-The code groups images by patient ID and assigns the internal source to a 70/15/15 split: train/validation/test. A simple rule is used:
-
-- `123_left.jpeg` and `123_right.jpeg` belong to the same patient
-- the assignment objective balances total image counts and the distribution of lesion-positive images and boxes by class
-- left/right eyes from a patient stay in the same partition
-- rare lesions may be absent from one or more partitions when too few independent patients contain them
-
-This design is intended to avoid optimistic validation results caused by patient-level data leakage while keeping the test set large enough to be meaningful.
-
-## 6. Storage policy
-
-The training and test images are large and can consume significant storage. The project therefore avoids copying them into the home directory by:
-
-- reading all source images directly from `/mnt/hdd2/faraj/train`
-- writing generated dataset artifacts into `/home/faraj/Diabetic-Retinopathy-Project/outputs`
-- creating symlinks rather than duplicates inside the export data structure
-
-This preserves the home volume for code, metadata, and the virtual environment while keeping only the actual image corpus on the mounted disk. No generated model or dataset outputs should be stored under `/mnt/hdd2/faraj`.
-
-## 7. Training and modeling direction
-
-The current project is positioned as a foundation for lesion detection and image-level diabetic retinopathy grading.
-
-### Detection baseline
-
-- Use a PyTorch object-detection baseline such as Faster R-CNN with an FPN backbone
-- Compare against a YOLO-based detector on the same train/val/test split
-- Report per-class precision/recall and mAP at stated IoU thresholds
-
-### Severity-grading baseline
-
-- Train a model to predict the five ordered Kaggle DR severity grades
-- Evaluate with quadratic weighted kappa and a confusion matrix
-
-The system should not be presented as clinically validated from this dataset alone; rather, it is a reproducible research pipeline for building and comparing baselines.
-
-## 8. GPU usage policy
-
-The workstation has four A5000 GPUs. The supervisor explicitly indicated that the free cards for this project are GPUs 2 and 3, and these are the only ones that should be used for model training and inference.
-
-Always launch PyTorch code with the visible subset restricted to those cards:
+## Tests
 
 ```bash
-cd /home/faraj/Diabetic-Retinopathy-Project
-. .venv/bin/activate
-./run_on_gpus_2_3.sh python your_training_script.py
+python -m pytest -q
 ```
-
-This sets `CUDA_VISIBLE_DEVICES=2,3`, which hides GPUs 0 and 1 from Python. Inside the process, torch sees only two devices, indexed as `cuda:0` and `cuda:1`. This means:
-
-- `cuda:0` maps to physical GPU 2
-- `cuda:1` maps to physical GPU 3
-- do not use `device_ids=[2,3]` inside the training code after the environment variable is set
-- use `device_ids=[0,1]` for a two-GPU run, or `torch.cuda.set_device(0)` for a single-GPU run
-
-For future multi-GPU training, the workflow should therefore be:
-
-```bash
-cd /home/faraj/Diabetic-Retinopathy-Project
-. .venv/bin/activate
-./run_on_gpus_2_3.sh python -m torch.distributed.run --nproc_per_node=2 train.py
-```
-
-This prevents accidental use of GPUs 0 and 1, which are already reserved by other users.
-
-## 9. Operational cautions
-
-- Do not run a dataset export with a training folder that has been copied into the home directory.
-- Prefer absolute paths to the mounted drive for any large image data.
-- Keep the virtual environment under the repo (for example `.venv`) to satisfy local environment requirements.
-- Use only the allowed GPUs for model runs: physical GPUs 2 and 3.
-- If the annotation CSV folder changes location, update the `--annotations` path in the commands above.
-- Train, validation, and test partitions are all generated from `/mnt/hdd2/faraj/train`.
-
-## 10. Validation status
-
-The repository includes automated tests that check:
-
-- box scaling and clamping
-- rejection of malformed or invalid boxes
-- deterministic train/val split assignment
-- patient grouping across both eyes
-- class distribution across splits
-- complete lesion-count spreadsheet output, including zero-count classes
-
-The project tests are passing under the current environment.
-
-## 11. Example end-to-end command sequence
-
-```bash
-cd /home/faraj/Diabetic-Retinopathy-Project
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-
-python visualize_annotations.py \
-  --annotations /home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations \
-  --images /mnt/hdd2/faraj/train \
-  --output /home/faraj/Diabetic-Retinopathy-Project/outputs/visualizations/fundus_box_overlays.png \
-  --max-images 6
-
-python yolo_loader.py \
-  --annotations /home/faraj/Diabetic-Retinopathy-Project/BBoxAnnotations \
-  --train-images /mnt/hdd2/faraj/train \
-  --output /home/faraj/Diabetic-Retinopathy-Project/outputs/yolo_dataset \
-  --seed 42
-
-./run_on_gpus_2_3.sh .venv/bin/python train_yolo.py \
-  --data /home/faraj/Diabetic-Retinopathy-Project/outputs/yolo_dataset/dataset.yaml \
-  --model yolov8n.pt \
-  --epochs 20 \
-  --imgsz 640 \
-  --batch 16 \
-  --device 0,1 \
-  --seed 42
-```
-
-The trainer checks that all three exported folders match the split manifest and that no patient crosses split boundaries before it starts. Each launch replaces the previous generated contents of `outputs/yolo_runs/`, keeping the latest checkpoints, plots, config, and metrics directly in that one folder. Training uses only train and validation data; after training, the best checkpoint is evaluated once on the held-out internal test split. `test_metrics.csv` contains aggregate and per-class precision, recall, mAP50, and mAP50-95. The test set is not used to select checkpoints.
-
-This is the intended operating pattern for the project: keep the repo and environment local, keep the image corpus on the HDD, and store generated datasets and training artifacts in the repository’s local `outputs/` folder only.
-
-## 12. Research reading list
-
-1. Gulshan et al. (2016), Development and Validation of a Deep Learning Algorithm for Detection of Diabetic Retinopathy in Retinal Fundus Photographs, JAMA.
-2. Ting et al. (2017), Development and Validation of a Deep Learning System for Diabetic Retinopathy and Related Eye Diseases Using Retinal Images from Multiethnic Populations, JAMA.
-3. Abràmoff et al. (2018), Pivotal trial of an autonomous AI-based diagnostic system for detection of diabetic retinopathy in primary care offices, npj Digital Medicine.
-4. Redmon et al. (2016), You Only Look Once: Unified, Real-Time Object Detection, CVPR.
-5. Ren et al. (2015), Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks, NeurIPS.
-6. Lin et al. (2017), Feature Pyramid Networks for Object Detection, CVPR.
-7. Lin et al. (2017), Focal Loss for Dense Object Detection, ICCV.
-8. Tan et al. (2020), EfficientDet: Scalable and Efficient Object Detection, CVPR.
-
-The project is designed to move from raw annotation parsing to a clean, audit-friendly, patient-safe detection pipeline before model training begins.
